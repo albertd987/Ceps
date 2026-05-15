@@ -39,6 +39,9 @@ import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.Point
+import com.cepalert.ui.detail.ZoneDetailSheet
+import com.cepalert.ui.weather.WeatherBottomSheet
+import com.cepalert.ui.map.ScoredZone
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -54,6 +57,8 @@ private fun scoreColorHex(score: Int?): String = when {
 fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showWeatherSheet by remember { mutableStateOf(false) }
+    val selectedZoneState = remember { mutableStateOf<ScoredZone?>(null) }
+    var selectedZone by selectedZoneState
 
     val dateLabel = remember {
         LocalDate.now().format(DateTimeFormatter.ofPattern("dd MMM", Locale("ca")))
@@ -115,6 +120,23 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                                 )
                             }
                         }
+                        // Register click listener with fresh state snapshot
+                        val zones = state.scoredZones
+                        map.addOnMapClickListener { latLng ->
+                            val nearest = zones.minByOrNull { sz ->
+                                val dLat = sz.zone.centroidLat - latLng.latitude
+                                val dLon = sz.zone.centroidLon - latLng.longitude
+                                dLat * dLat + dLon * dLon
+                            }
+                            nearest?.let { sz ->
+                                val dLat = sz.zone.centroidLat - latLng.latitude
+                                val dLon = sz.zone.centroidLon - latLng.longitude
+                                if (dLat * dLat + dLon * dLon < 0.01) {
+                                    selectedZoneState.value = sz
+                                }
+                            }
+                            false
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -155,6 +177,24 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                         Text("💧 ${weather.humidity7dAvg.toInt()} %")
                     }
                 }
+            }
+
+            // Weather bottom sheet
+            if (showWeatherSheet) {
+                state.weather?.let { weather ->
+                    WeatherBottomSheet(
+                        weather = weather,
+                        onDismiss = { showWeatherSheet = false }
+                    )
+                }
+            }
+
+            // Zone detail bottom sheet
+            selectedZone?.let { zone ->
+                ZoneDetailSheet(
+                    scoredZone = zone,
+                    onDismiss = { selectedZone = null }
+                )
             }
         }
     }
