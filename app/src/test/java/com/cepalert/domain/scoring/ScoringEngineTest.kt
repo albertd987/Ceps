@@ -64,4 +64,35 @@ class ScoringEngineTest {
         assertEquals(0.0, ScoringEngine.normalizeTemperature(-10.0), 0.001)
         assertEquals(0.0, ScoringEngine.normalizeTemperature(45.0), 0.001)
     }
+
+    private fun zone(compatible: Boolean) = com.cepalert.data.model.ForestZone(
+        id = "z1", centroidLat = 42.4, centroidLon = 1.5,
+        bosqueCompatible = compatible,
+        bosqueTipo = if (compatible) "pino" else "otro",
+        altitud = 1200, orientacion = "N", geometryJson = "{}"
+    )
+
+    private fun weather(humidity: Double, rain10d: Double, temp: Double) =
+        com.cepalert.data.model.WeatherData(
+            humidity7dAvg = humidity, rain10dTotal = rain10d,
+            rain7dTotal = 0.0, rain14dTotal = 0.0,
+            temp7dAvg = temp, temp7dMax = 0.0, temp7dMin = 0.0,
+            daysSinceSignificantRain = 0, source = "test", updatedAtEpochMs = 0L
+        )
+
+    @Test fun perfect_conditions_score_is_100() {
+        val result = ScoringEngine.score(weather(80.0, 55.0, 15.0), zone(true))
+        assertEquals(100, result.score)
+        assertEquals(4, result.rows.size)
+    }
+
+    @Test fun worst_conditions_score_is_zero() {
+        val result = ScoringEngine.score(weather(10.0, 0.0, -10.0), zone(false))
+        assertEquals(0, result.score)
+    }
+
+    @Test fun incompatible_forest_caps_score_below_80() {
+        val result = ScoringEngine.score(weather(80.0, 55.0, 15.0), zone(false))
+        assertEquals(80, result.score)
+    }
 }
