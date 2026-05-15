@@ -25,4 +25,25 @@ class ScoringEngineTest {
         assertEquals(0.0, ScoringEngine.normalizeHumidity(10.0), 0.001)
         assertEquals(0.0, ScoringEngine.normalizeHumidity(120.0), 0.001)
     }
+
+    @Test fun rain_in_optimal_band_is_one() {
+        assertEquals(1.0, ScoringEngine.normalizeRain10d(30.0), 0.001)
+        assertEquals(1.0, ScoringEngine.normalizeRain10d(55.0), 0.001)
+        assertEquals(1.0, ScoringEngine.normalizeRain10d(80.0), 0.001)
+    }
+
+    @Test fun rain_below_optimal_ramps_from_zero() {
+        assertEquals(0.0, ScoringEngine.normalizeRain10d(0.0), 0.001)
+        assertEquals(0.5, ScoringEngine.normalizeRain10d(15.0), 0.001)
+    }
+
+    @Test fun rain_between_80_and_120_decays() {
+        assertEquals(1.0, ScoringEngine.normalizeRain10d(80.0), 0.001)
+        assertEquals(0.5, ScoringEngine.normalizeRain10d(100.0), 0.001)
+    }
+
+    @Test fun rain_above_120_is_penalized() {
+        assertEquals(0.2, ScoringEngine.normalizeRain10d(125.0), 0.001)
+        assertEquals(0.2, ScoringEngine.normalizeRain10d(300.0), 0.001)
+    }
 }

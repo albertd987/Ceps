@@ -7,4 +7,11 @@ object ScoringEngine {
         rh < 70.0 -> ((rh - 40.0) / 30.0).coerceIn(0.0, 1.0)
         else -> ((100.0 - rh) / 10.0).coerceIn(0.0, 1.0)
     }
+
+    fun normalizeRain10d(mm: Double): Double = when {
+        mm in 30.0..80.0 -> 1.0
+        mm < 30.0 -> (mm / 30.0).coerceIn(0.0, 1.0)
+        mm <= 120.0 -> 1.0 - ((mm - 80.0) / 40.0)
+        else -> 0.2
+    }
 }
