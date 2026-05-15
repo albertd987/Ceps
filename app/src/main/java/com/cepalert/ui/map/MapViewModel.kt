@@ -2,6 +2,8 @@ package com.cepalert.ui.map
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.cepalert.data.local.CachedScores
+import com.cepalert.data.local.ScoreCache
 import com.cepalert.data.model.ForestZone
 import com.cepalert.data.model.ScoreResult
 import com.cepalert.data.model.WeatherData
@@ -28,7 +30,8 @@ data class MapUiState(
 @HiltViewModel
 class MapViewModel @Inject constructor(
     private val forestRepository: ForestRepository,
-    private val weatherRepository: WeatherRepository
+    private val weatherRepository: WeatherRepository,
+    private val scoreCache: ScoreCache
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(MapUiState())
@@ -39,32 +42,62 @@ class MapViewModel @Inject constructor(
     fun refresh() {
         _uiState.update { it.copy(isLoading = true, error = null) }
         viewModelScope.launch {
-            runCatching {
+            val cached = scoreCache.read(System.currentTimeMillis())
+            if (cached != null) {
                 val zones = forestRepository.loadZones()
-                var representativeWeather: WeatherData? = null
-                val scored = zones.map { zone ->
-                    val weather = runCatching {
-                        weatherRepository.getWeather(zone.centroidLat, zone.centroidLon)
-                    }.getOrNull()
-                    if (weather != null && representativeWeather == null) {
-                        representativeWeather = weather
-                    }
-                    ScoredZone(
-                        zone = zone,
-                        score = weather?.let { ScoringEngine.score(it, zone) }
-                    )
+                val zoneMap = zones.associateBy { it.id }
+                val scored = cached.scores.mapNotNull { result ->
+                    zoneMap[result.zoneId]?.let { zone -> ScoredZone(zone, result) }
                 }
                 _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        scoredZones = scored,
-                        weather = representativeWeather
+                    it.copy(isLoading = false, scoredZones = scored, weather = cached.weather)
+                }
+            } else {
+                fetchAndScore()
+            }
+        }
+    }
+
+    fun forceRefresh() {
+        _uiState.update { it.copy(isLoading = true, error = null) }
+        viewModelScope.launch { fetchAndScore() }
+    }
+
+    private suspend fun fetchAndScore() {
+        runCatching {
+            val zones = forestRepository.loadZones()
+            var representativeWeather: WeatherData? = null
+            val scored = zones.map { zone ->
+                val weather = runCatching {
+                    weatherRepository.getWeather(zone.centroidLat, zone.centroidLon)
+                }.getOrNull()
+                if (weather != null && representativeWeather == null) {
+                    representativeWeather = weather
+                }
+                ScoredZone(
+                    zone = zone,
+                    score = weather?.let { ScoringEngine.score(it, zone) }
+                )
+            }
+            if (representativeWeather != null) {
+                scoreCache.write(
+                    CachedScores(
+                        savedAtEpochMs = System.currentTimeMillis(),
+                        weather = representativeWeather!!,
+                        scores = scored.mapNotNull { it.score }
                     )
-                }
-            }.onFailure { e ->
-                _uiState.update {
-                    it.copy(isLoading = false, error = e.message ?: "Error desconocido")
-                }
+                )
+            }
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    scoredZones = scored,
+                    weather = representativeWeather
+                )
+            }
+        }.onFailure { e ->
+            _uiState.update {
+                it.copy(isLoading = false, error = e.message ?: "Error desconocido")
             }
         }
     }
