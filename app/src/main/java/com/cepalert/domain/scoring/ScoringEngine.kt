@@ -14,4 +14,10 @@ object ScoringEngine {
         mm <= 120.0 -> 1.0 - ((mm - 80.0) / 40.0)
         else -> 0.2
     }
+
+    fun normalizeTemperature(tempC: Double): Double = when {
+        tempC in 10.0..20.0 -> 1.0
+        tempC < 10.0 -> (1.0 - (10.0 - tempC) / 10.0).coerceIn(0.0, 1.0)
+        else -> (1.0 - (tempC - 20.0) / 10.0).coerceIn(0.0, 1.0)
+    }
 }

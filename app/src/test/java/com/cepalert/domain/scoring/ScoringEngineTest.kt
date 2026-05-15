@@ -46,4 +46,22 @@ class ScoringEngineTest {
         assertEquals(0.2, ScoringEngine.normalizeRain10d(125.0), 0.001)
         assertEquals(0.2, ScoringEngine.normalizeRain10d(300.0), 0.001)
     }
+
+    @Test fun temperature_in_optimal_band_is_one() {
+        assertEquals(1.0, ScoringEngine.normalizeTemperature(10.0), 0.001)
+        assertEquals(1.0, ScoringEngine.normalizeTemperature(15.0), 0.001)
+        assertEquals(1.0, ScoringEngine.normalizeTemperature(20.0), 0.001)
+    }
+
+    @Test fun temperature_decays_linearly_outside_band() {
+        assertEquals(0.5, ScoringEngine.normalizeTemperature(5.0), 0.001)
+        assertEquals(0.0, ScoringEngine.normalizeTemperature(0.0), 0.001)
+        assertEquals(0.5, ScoringEngine.normalizeTemperature(25.0), 0.001)
+        assertEquals(0.0, ScoringEngine.normalizeTemperature(30.0), 0.001)
+    }
+
+    @Test fun temperature_is_clamped() {
+        assertEquals(0.0, ScoringEngine.normalizeTemperature(-10.0), 0.001)
+        assertEquals(0.0, ScoringEngine.normalizeTemperature(45.0), 0.001)
+    }
 }
