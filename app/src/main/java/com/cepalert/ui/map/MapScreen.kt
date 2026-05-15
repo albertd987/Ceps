@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -154,6 +155,22 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
             // Loading spinner
             if (state.isLoading) {
                 CircularProgressIndicator(Modifier.align(Alignment.Center))
+            } else if (state.error != null) {
+                val errorMessage = state.error
+                Column(
+                    modifier = Modifier.align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = errorMessage!!,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Button(onClick = { viewModel.refresh() }) {
+                        Text("Reintentar")
+                    }
+                }
             }
 
             // Bottom conditions banner
