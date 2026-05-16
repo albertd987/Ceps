@@ -27,19 +27,50 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
 LAT_MIN, LAT_MAX = 42.0, 42.9
 LON_MIN, LON_MAX = 0.4,  3.3
-GRID_ROWS = 5
-GRID_COLS = 10
+GRID_ROWS = 10
+GRID_COLS = 20
 
-RATE_LIMIT_S = 1.0
+BATCH_SIZE   = 50   # locations per Open-Meteo request (API supports up to 50)
 MAX_RETRIES  = 3
 
 
 # ── Open-Meteo helpers ────────────────────────────────────────────────────────
 
-def fetch_om_weather(lat: float, lon: float) -> dict | None:
+def _parse_om_response(d: dict) -> dict:
+    n = len(d["time"])
+
+    def last_k(lst, k):
+        return lst[max(0, n - k):]
+
+    rain10d = sum(last_k(d["precipitation_sum"], 10))
+    rain7d  = sum(last_k(d["precipitation_sum"], 7))
+    rain14d = sum(d["precipitation_sum"])
+    temp7d  = sum(last_k(d["temperature_2m_mean"], 7)) / min(7, n)
+    hum7d   = sum(last_k(d["relative_humidity_2m_mean"], 7)) / min(7, n)
+
+    days_since = 0
+    for v in reversed(d["precipitation_sum"]):
+        if v > 10.0:
+            break
+        days_since += 1
+
+    return {
+        "rain10d":    round(rain10d, 2),
+        "rain7d":     round(rain7d, 2),
+        "rain14d":    round(rain14d, 2),
+        "temp7d":     round(temp7d, 2),
+        "hum7d":      round(hum7d, 2),
+        "days_since": days_since,
+    }
+
+
+def fetch_om_batch(cells: list[tuple[int, int, float, float]]) -> dict[tuple[int, int], dict | None]:
+    """Fetch weather for multiple grid cells in one API call."""
+    lats = ",".join(f"{lat:.4f}" for _, _, lat, _ in cells)
+    lons = ",".join(f"{lon:.4f}" for _, _, _, lon in cells)
     params = {
-        "latitude":      lat,
-        "longitude":     lon,
+        "latitude":      lats,
+        "longitude":     lons,
         "daily":         "precipitation_sum,temperature_2m_mean,temperature_2m_max,"
                          "temperature_2m_min,relative_humidity_2m_mean",
         "past_days":     14,
@@ -48,57 +79,54 @@ def fetch_om_weather(lat: float, lon: float) -> dict | None:
     }
     for attempt in range(MAX_RETRIES):
         try:
-            r = requests.get(OPEN_METEO_URL, params=params, timeout=20)
+            r = requests.get(OPEN_METEO_URL, params=params, timeout=30)
             r.raise_for_status()
-            d = r.json()["daily"]
-            n = len(d["time"])
-
-            def last_k(lst, k):
-                return lst[max(0, n - k):]
-
-            rain10d = sum(last_k(d["precipitation_sum"], 10))
-            rain7d  = sum(last_k(d["precipitation_sum"], 7))
-            rain14d = sum(d["precipitation_sum"])
-            temp7d  = sum(last_k(d["temperature_2m_mean"], 7)) / min(7, n)
-            hum7d   = sum(last_k(d["relative_humidity_2m_mean"], 7)) / min(7, n)
-
-            days_since = 0
-            for v in reversed(d["precipitation_sum"]):
-                if v > 10.0:
-                    break
-                days_since += 1
-
-            return {
-                "rain10d":    round(rain10d, 2),
-                "rain7d":     round(rain7d, 2),
-                "rain14d":    round(rain14d, 2),
-                "temp7d":     round(temp7d, 2),
-                "hum7d":      round(hum7d, 2),
-                "days_since": days_since,
-            }
+            data = r.json()
+            # Single location returns a dict; multiple returns a list
+            if isinstance(data, dict):
+                data = [data]
+            result = {}
+            for i, (row, col, _, _) in enumerate(cells):
+                try:
+                    result[(row, col)] = _parse_om_response(data[i]["daily"])
+                except Exception:
+                    result[(row, col)] = None
+            return result
         except Exception as e:
             wait = 10 * (2 ** attempt)
             if attempt < MAX_RETRIES - 1:
-                print(f"  Retry {attempt+1} ({lat:.2f},{lon:.2f}), waiting {wait}s...", file=sys.stderr)
+                print(f"  Retry {attempt+1} batch of {len(cells)}, waiting {wait}s: {e}", file=sys.stderr)
                 time.sleep(wait)
             else:
-                print(f"  WARN: OM cell ({lat:.2f},{lon:.2f}) failed after {MAX_RETRIES} retries", file=sys.stderr)
-                return None
+                print(f"  WARN: batch of {len(cells)} failed after {MAX_RETRIES} retries", file=sys.stderr)
+                return {(row, col): None for row, col, _, _ in cells}
+    return {}
 
 
 def build_om_grid() -> dict[tuple[int, int], dict | None]:
     lat_step = (LAT_MAX - LAT_MIN) / GRID_ROWS
     lon_step = (LON_MAX - LON_MIN) / GRID_COLS
-    grid = {}
-    total = GRID_ROWS * GRID_COLS
-    for row in range(GRID_ROWS):
-        for col in range(GRID_COLS):
-            lat = LAT_MIN + (row + 0.5) * lat_step
-            lon = LON_MIN + (col + 0.5) * lon_step
-            idx = row * GRID_COLS + col
-            print(f"  OM grid {idx+1}/{total} ({lat:.2f},{lon:.2f})")
-            grid[(row, col)] = fetch_om_weather(lat, lon)
-            time.sleep(RATE_LIMIT_S)
+
+    all_cells = [
+        (row, col,
+         LAT_MIN + (row + 0.5) * lat_step,
+         LON_MIN + (col + 0.5) * lon_step)
+        for row in range(GRID_ROWS)
+        for col in range(GRID_COLS)
+    ]
+
+    total  = len(all_cells)
+    grid   = {}
+    done   = 0
+
+    for i in range(0, total, BATCH_SIZE):
+        batch = all_cells[i:i + BATCH_SIZE]
+        print(f"  OM batch {i//BATCH_SIZE + 1}/{-(-total//BATCH_SIZE)}: cells {i+1}-{min(i+BATCH_SIZE, total)}/{total}")
+        grid.update(fetch_om_batch(batch))
+        done += len(batch)
+        if done < total:
+            time.sleep(1)  # brief pause between batches
+
     return grid
 
 
