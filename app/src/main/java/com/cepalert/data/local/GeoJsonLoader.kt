@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.double
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -27,6 +28,7 @@ object GeoJsonLoader {
                 bosqueTipo = props["bosque_tipo"]!!.jsonPrimitive.content,
                 altitud = props["altitud"]!!.jsonPrimitive.int,
                 orientacion = props["orientacion"]!!.jsonPrimitive.content,
+                soilPh = props["soil_ph"]?.jsonPrimitive?.doubleOrNull ?: 5.5,
                 geometryJson = (geometry as JsonObject).toString()
             )
         }

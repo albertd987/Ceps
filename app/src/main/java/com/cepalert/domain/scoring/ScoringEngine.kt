@@ -38,6 +38,14 @@ object ScoringEngine {
         else    -> 0.3
     }
 
+    // Boletus needs acidic soil (pH 3.5-6.0). Calcareous (pH>7) = near-zero chance.
+    fun normalizeSoilPh(ph: Double): Double = when {
+        ph <= 5.0 -> 1.0
+        ph <= 6.0 -> 1.0 - ((ph - 5.0) / 1.0) * 0.3   // 1.0 → 0.7
+        ph <= 7.0 -> 0.7 - ((ph - 6.0) / 1.0) * 0.6   // 0.7 → 0.1
+        else      -> maxOf(0.0, 0.1 - ((ph - 7.0) * 0.1))
+    }
+
     // N/NE retain moisture best; S/SW are driest
     fun normalizeOrientation(o: String): Double = when (o.uppercase()) {
         "N"  -> 1.0
@@ -82,24 +90,27 @@ object ScoringEngine {
         val nTemp        = normalizeTemperature(weather.temp7dAvg)
         val nAltitude    = normalizeAltitude(zone.altitud)
         val nOrientation = normalizeOrientation(zone.orientacion)
+        val nSoilPh      = normalizeSoilPh(zone.soilPh)
         val nSeason      = seasonalFactor(month)
 
         // Weights sum to 1.0; season applied as multiplier
-        val base = nHumidity * 0.35 + nRain * 0.25 + nForest * 0.15 +
-                   nTemp * 0.1 + nAltitude * 0.1 + nOrientation * 0.05
+        val base = nHumidity * 0.30 + nRain * 0.22 + nForest * 0.13 +
+                   nSoilPh * 0.12 + nTemp * 0.09 + nAltitude * 0.09 + nOrientation * 0.05
         val total = base * nSeason
 
         val rows = listOf(
             com.cepalert.data.model.ScoreBreakdownRow(
-                "Humitat", "${weather.humidity7dAvg.toInt()} %", nHumidity, 0.35),
+                "Humitat", "${weather.humidity7dAvg.toInt()} %", nHumidity, 0.30),
             com.cepalert.data.model.ScoreBreakdownRow(
-                "Pluja 10d", "${weather.rain10dTotal.toInt()} mm", nRain, 0.25),
+                "Pluja 10d", "${weather.rain10dTotal.toInt()} mm", nRain, 0.22),
             com.cepalert.data.model.ScoreBreakdownRow(
-                "Tipus de bosc", zone.bosqueTipo, nForest, 0.15),
+                "Tipus de bosc", zone.bosqueTipo, nForest, 0.13),
             com.cepalert.data.model.ScoreBreakdownRow(
-                "Temperatura", "${weather.temp7dAvg.toInt()} °C", nTemp, 0.1),
+                "pH del sòl", "%.1f".format(zone.soilPh), nSoilPh, 0.12),
             com.cepalert.data.model.ScoreBreakdownRow(
-                "Altitud", "${zone.altitud} m", nAltitude, 0.1),
+                "Temperatura", "${weather.temp7dAvg.toInt()} °C", nTemp, 0.09),
+            com.cepalert.data.model.ScoreBreakdownRow(
+                "Altitud", "${zone.altitud} m", nAltitude, 0.09),
             com.cepalert.data.model.ScoreBreakdownRow(
                 "Orientació", zone.orientacion, nOrientation, 0.05),
             com.cepalert.data.model.ScoreBreakdownRow(

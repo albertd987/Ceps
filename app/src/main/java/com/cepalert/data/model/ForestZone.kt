@@ -11,5 +11,6 @@ data class ForestZone(
     val bosqueTipo: String,           // "pino" | "haya" | "roble" | "otro"
     val altitud: Int,                 // mean altitude, meters
     val orientacion: String,          // "N", "NE", ...
+    val soilPh: Double,               // topsoil pH (SoilGrids 0-5cm), default 5.5
     val geometryJson: String          // raw GeoJSON geometry string, for map rendering
 )

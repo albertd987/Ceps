@@ -44,6 +44,16 @@ def normalize_forest(tipo: str) -> float:
     return {"haya": 1.0, "pino": 0.75, "roble": 0.6}.get(tipo.lower(), 0.3)
 
 
+def normalize_soil_ph(ph: float) -> float:
+    if ph <= 5.0:
+        return 1.0
+    if ph <= 6.0:
+        return 1.0 - ((ph - 5.0) / 1.0) * 0.3
+    if ph <= 7.0:
+        return 0.7 - ((ph - 6.0) / 1.0) * 0.6
+    return max(0.0, 0.1 - (ph - 7.0) * 0.1)
+
+
 def normalize_orientation(o: str) -> float:
     mapping = {
         "N": 1.0, "NE": 0.85, "NW": 0.75,
@@ -62,11 +72,13 @@ def compute_score(weather: dict, zone: dict, month: int) -> int:
     n_hum  = normalize_humidity(weather["hum7d"])
     n_rain = normalize_rain10d(weather["rain10d"])
     n_for  = normalize_forest(zone["bosque_tipo"])
+    n_ph   = normalize_soil_ph(zone.get("soil_ph", 5.5))
     n_temp = normalize_temperature(weather["temp7d"])
     n_alt  = normalize_altitude(zone["altitud"])
     n_ori  = normalize_orientation(zone["orientacion"])
     n_sea  = seasonal_factor(month)
 
-    base  = n_hum * 0.35 + n_rain * 0.25 + n_for * 0.15 + n_temp * 0.1 + n_alt * 0.1 + n_ori * 0.05
+    base  = (n_hum * 0.30 + n_rain * 0.22 + n_for * 0.13 +
+             n_ph  * 0.12 + n_temp * 0.09 + n_alt * 0.09 + n_ori * 0.05)
     total = base * n_sea
     return max(0, min(100, round(total * 100)))
