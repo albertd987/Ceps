@@ -5,42 +5,39 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class RemoteScores(
-    val v: Int = 1,
+    val v: Int = 2,
     @SerialName("updated_at") val updatedAt: String,
     val month: Int,
-    // Map<zoneId, [score, rain10d, temp7d, hum7d, rain7d, rain14d, daysSince]>
+    // Map<zoneId, [score, soilMoist7d, soilTemp7d, soilTempDrop, rain14d, rainTriggerMm, triggerDaysAgo]>
     val zones: Map<String, List<Double>>
 )
 
 fun RemoteScores.toWeatherData(zoneId: String): WeatherData? {
     val d = zones[zoneId] ?: return null
+    if (d.size < 7) return null
     return WeatherData(
-        humidity7dAvg            = d[3],
-        rain10dTotal             = d[1],
-        rain7dTotal              = d[4],
-        rain14dTotal             = d[5],
-        temp7dAvg                = d[2],
-        temp7dMax                = 0.0,
-        temp7dMin                = 0.0,
-        daysSinceSignificantRain = d[6].toInt(),
-        source                   = "Open-Meteo",
-        updatedAtEpochMs         = System.currentTimeMillis()
+        soilMoisture7d   = d[1],
+        soilTemp7d       = d[2],
+        soilTempDrop     = d[3],
+        rain14dTotal     = d[4],
+        rainTriggerMm    = d[5],
+        triggerDaysAgo   = d[6].toInt(),
+        source           = "Open-Meteo+AEMET",
+        updatedAtEpochMs = System.currentTimeMillis()
     )
 }
 
 fun RemoteScores.regionalWeather(): WeatherData {
-    val values = zones.values
+    val values = zones.values.filter { it.size >= 7 }
     fun avg(idx: Int) = values.map { it[idx] }.average()
     return WeatherData(
-        humidity7dAvg            = avg(3),
-        rain10dTotal             = avg(1),
-        rain7dTotal              = avg(4),
-        rain14dTotal             = avg(5),
-        temp7dAvg                = avg(2),
-        temp7dMax                = 0.0,
-        temp7dMin                = 0.0,
-        daysSinceSignificantRain = values.map { it[6].toInt() }.average().toInt(),
-        source                   = "Open-Meteo",
-        updatedAtEpochMs         = System.currentTimeMillis()
+        soilMoisture7d   = avg(1),
+        soilTemp7d       = avg(2),
+        soilTempDrop     = avg(3),
+        rain14dTotal     = avg(4),
+        rainTriggerMm    = avg(5),
+        triggerDaysAgo   = values.map { it[6].toInt() }.average().toInt(),
+        source           = "Open-Meteo+AEMET",
+        updatedAtEpochMs = System.currentTimeMillis()
     )
 }

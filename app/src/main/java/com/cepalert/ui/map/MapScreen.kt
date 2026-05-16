@@ -311,11 +311,11 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        WeatherStat("Pluja 10d", "${weather.rain10dTotal.toInt()} mm")
+                        WeatherStat("Pluja 14d", "${weather.rain14dTotal.toInt()} mm")
                         StripDivider()
-                        WeatherStat("Temp", "${weather.temp7dAvg.toInt()} °C")
+                        WeatherStat("Temp sòl", "${"%.1f".format(weather.soilTemp7d)} °C")
                         StripDivider()
-                        WeatherStat("Humitat", "${weather.humidity7dAvg.toInt()} %")
+                        WeatherStat("Humitat sòl", "${"%.0f".format(weather.soilMoisture7d * 100)} %")
                     }
                 }
             }

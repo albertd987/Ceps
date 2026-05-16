@@ -4,14 +4,12 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class WeatherData(
-    val humidity7dAvg: Double,        // relative humidity %, mean of last 7 days
-    val rain10dTotal: Double,         // mm, accumulated last 10 days
-    val rain7dTotal: Double,          // mm, accumulated last 7 days
-    val rain14dTotal: Double,         // mm, accumulated last 14 days
-    val temp7dAvg: Double,            // °C, mean of last 7 days
-    val temp7dMax: Double,            // °C
-    val temp7dMin: Double,            // °C
-    val daysSinceSignificantRain: Int,// days since last day with > 10 mm
+    val soilMoisture7d: Double,     // m3/m3, volumetric soil water content 0-7cm, mean 7d
+    val soilTemp7d: Double,         // °C, soil temperature 0-7cm, mean 7d
+    val soilTempDrop: Double,       // °C, cooling week-over-week (positive = cooled)
+    val rain14dTotal: Double,       // mm, accumulated 14 days (AEMET if available)
+    val rainTriggerMm: Double,      // mm, best 3-consecutive-day block last 14d
+    val triggerDaysAgo: Int,        // days ago the trigger block ended
     val source: String,
     val updatedAtEpochMs: Long
 )

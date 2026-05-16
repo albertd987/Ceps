@@ -10,10 +10,11 @@ interface OpenMeteoApi {
         @Query("latitude") lat: Double,
         @Query("longitude") lon: Double,
         @Query("past_days") pastDays: Int = 14,
-        @Query("forecast_days") forecastDays: Int = 1,
+        @Query("forecast_days") forecastDays: Int = 0,
         @Query("daily") daily: String =
-            "precipitation_sum,temperature_2m_mean,temperature_2m_max," +
-            "temperature_2m_min,relative_humidity_2m_mean",
+            "precipitation_sum," +
+            "soil_temperature_0_to_7cm_mean," +
+            "soil_moisture_0_to_7cm_mean",
         @Query("timezone") timezone: String = "Europe/Madrid"
     ): OpenMeteoResponse
 }

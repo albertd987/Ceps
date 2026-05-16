@@ -12,30 +12,40 @@ import javax.inject.Singleton
 fun mapToWeatherData(response: OpenMeteoResponse, nowEpochMs: Long): WeatherData {
     val d = response.daily
     val n = d.time.size
-    fun lastN(list: List<Double>, k: Int) = list.subList((n - k).coerceAtLeast(0), n)
 
-    val rain10d = lastN(d.precipitationSum, 10).sum()
-    val rain7d = lastN(d.precipitationSum, 7).sum()
-    val rain14d = lastN(d.precipitationSum, 14).sum()
-    val temp7d = lastN(d.temperatureMean, 7)
-    val hum7d = lastN(d.humidityMean, 7)
+    fun <T> lastN(list: List<T?>, k: Int): List<T> =
+        list.subList((n - k).coerceAtLeast(0), n).filterNotNull()
 
-    var daysSince = 0
-    for (i in d.precipitationSum.indices.reversed()) {
-        if (d.precipitationSum[i] > 10.0) break
-        daysSince++
+    // Soil moisture (m3/m3)
+    val moistValues = lastN(d.soilMoisture, 7)
+    val soilMoisture7d = if (moistValues.isNotEmpty()) moistValues.average() else 0.25
+
+    // Soil temperature (°C)
+    val tempAll = d.soilTemperature.filterNotNull()
+    val tempRecent = lastN(d.soilTemperature, 7)
+    val tempOld    = d.soilTemperature.take(7).filterNotNull()
+    val soilTemp7d  = if (tempRecent.isNotEmpty()) tempRecent.average() else 12.0
+    val soilTempOld = if (tempOld.isNotEmpty()) tempOld.average() else soilTemp7d
+    val soilTempDrop = soilTempOld - soilTemp7d  // positive = cooled
+
+    // Rain trigger: best 3-consecutive-day block
+    val precip = d.precipitationSum
+    var bestMm = 0.0; var bestDaysAgo = 99
+    for (i in 0 until n - 2) {
+        val block = precip[i] + precip[i + 1] + precip[i + 2]
+        if (block > bestMm) { bestMm = block; bestDaysAgo = n - i - 2 }
     }
 
+    val rain14d = precip.sum()
+
     return WeatherData(
-        humidity7dAvg = hum7d.average(),
-        rain10dTotal = rain10d,
-        rain7dTotal = rain7d,
-        rain14dTotal = rain14d,
-        temp7dAvg = temp7d.average(),
-        temp7dMax = lastN(d.temperatureMax, 7).max(),
-        temp7dMin = lastN(d.temperatureMin, 7).min(),
-        daysSinceSignificantRain = daysSince,
-        source = "Open-Meteo",
+        soilMoisture7d   = soilMoisture7d,
+        soilTemp7d       = soilTemp7d,
+        soilTempDrop     = soilTempDrop,
+        rain14dTotal     = rain14d,
+        rainTriggerMm    = bestMm,
+        triggerDaysAgo   = bestDaysAgo,
+        source           = "Open-Meteo",
         updatedAtEpochMs = nowEpochMs
     )
 }

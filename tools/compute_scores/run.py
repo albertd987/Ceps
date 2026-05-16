@@ -1,11 +1,15 @@
 """
 Hybrid weather computation:
-  - Precipitation: AEMET real station data (nearest station, 14d accumulated)
-  - Temperature + Humidity: Open-Meteo 10x20 grid (model, altitude-corrected)
+  - Precipitation pattern + soil variables: Open-Meteo 10x20 grid (model, altitude-corrected)
+  - Precipitation total (rain14d): AEMET real station data (nearest station, 14d accumulated)
+
+Soil variables used (more accurate than air proxies):
+  - soil_moisture_0_to_7cm_mean: actual soil water content (m3/m3)
+  - soil_temperature_0_to_7cm_mean: actual soil temp at mycelium depth
 
 Requires env var: AEMET_API_KEY (set as GitHub Actions secret)
 Falls back to Open-Meteo precipitation if AEMET unavailable.
-Runtime: ~3 min (200 Open-Meteo calls + AEMET station fetch).
+Runtime: ~3 min (4 Open-Meteo batch calls + AEMET station fetch).
 """
 import json
 import os
@@ -42,25 +46,42 @@ def _parse_om_response(d: dict) -> dict:
     def last_k(lst, k):
         return lst[max(0, n - k):]
 
-    rain10d = sum(last_k(d["precipitation_sum"], 10))
-    rain7d  = sum(last_k(d["precipitation_sum"], 7))
-    rain14d = sum(d["precipitation_sum"])
-    temp7d  = sum(last_k(d["temperature_2m_mean"], 7)) / min(7, n)
-    hum7d   = sum(last_k(d["relative_humidity_2m_mean"], 7)) / min(7, n)
+    def safe_mean(lst, k):
+        vals = [v for v in last_k(lst, k) if v is not None]
+        return sum(vals) / len(vals) if vals else None
 
-    days_since = 0
-    for v in reversed(d["precipitation_sum"]):
-        if v > 10.0:
-            break
-        days_since += 1
+    precip = d["precipitation_sum"]
+    rain14d = sum(v for v in precip if v is not None)
+
+    # Soil moisture (m3/m3) — actual water content at 0-7cm
+    soil_moist_raw = d.get("soil_moisture_0_to_7cm_mean") or []
+    soil_moist_7d  = safe_mean(soil_moist_raw, 7) or 0.25   # fallback: field capacity
+
+    # Soil temperature (°C) at mycelium depth 0-7cm
+    soil_temp_raw    = d.get("soil_temperature_0_to_7cm_mean") or []
+    soil_temp_recent = safe_mean(soil_temp_raw, 7) or 12.0
+    soil_temp_old    = safe_mean(soil_temp_raw[:7], 7) or 12.0
+    # positive = soil has cooled (old week warmer than recent week)
+    soil_temp_drop   = round(soil_temp_old - soil_temp_recent, 1)
+
+    # Rain trigger: best 3-consecutive-day block in last 14 days
+    # Index n-1 = yesterday (1 day ago), index 0 = 14 days ago
+    best_trigger_mm   = 0.0
+    best_trigger_days = 99
+    for i in range(n - 2):
+        block = sum(precip[i:i+3])
+        if block > best_trigger_mm:
+            best_trigger_mm   = block
+            # days ago the block ended: yesterday=1, so index i+2 -> (n-1-i-2)+1 = n-i-2
+            best_trigger_days = n - i - 2
 
     return {
-        "rain10d":    round(rain10d, 2),
-        "rain7d":     round(rain7d, 2),
-        "rain14d":    round(rain14d, 2),
-        "temp7d":     round(temp7d, 2),
-        "hum7d":      round(hum7d, 2),
-        "days_since": days_since,
+        "soil_moist_7d":    round(soil_moist_7d, 4),
+        "soil_temp_7d":     round(soil_temp_recent, 1),
+        "soil_temp_drop":   soil_temp_drop,
+        "rain14d":          round(rain14d, 1),
+        "rain_trigger_mm":  round(best_trigger_mm, 1),
+        "trigger_days_ago": best_trigger_days,
     }
 
 
@@ -71,8 +92,9 @@ def fetch_om_batch(cells: list[tuple[int, int, float, float]]) -> dict[tuple[int
     params = {
         "latitude":      lats,
         "longitude":     lons,
-        "daily":         "precipitation_sum,temperature_2m_mean,temperature_2m_max,"
-                         "temperature_2m_min,relative_humidity_2m_mean",
+        "daily":         "precipitation_sum,"
+                         "soil_temperature_0_to_7cm_mean,"
+                         "soil_moisture_0_to_7cm_mean",
         "past_days":     14,
         "forecast_days": 0,
         "timezone":      "Europe/Madrid",
@@ -141,9 +163,9 @@ def nearest_om_cell(lat: float, lon: float) -> tuple[int, int]:
 def om_fallback(grid: dict) -> dict:
     values = [w for w in grid.values() if w is not None]
     if not values:
-        return {"rain10d": 0, "rain7d": 0, "rain14d": 0,
-                "temp7d": 15, "hum7d": 60, "days_since": 30}
-    return {k: round(sum(v[k] for v in values) / len(values), 2) for k in values[0]}
+        return {"soil_moist_7d": 0.25, "soil_temp_7d": 12.0, "soil_temp_drop": 0.0,
+                "rain14d": 0, "rain_trigger_mm": 0, "trigger_days_ago": 99}
+    return {k: round(sum(v[k] for v in values) / len(values), 4) for k in values[0]}
 
 
 # ── AEMET helpers ─────────────────────────────────────────────────────────────
@@ -208,41 +230,36 @@ def main():
         cell    = nearest_om_cell(lat, lon)
         om_w    = om_grid.get(cell) or fallback
 
-        # Override precipitation with AEMET if available
+        # AEMET overrides rain14d with real station measurement
         aemet_rain = None
         if aemet_stations:
             aemet_rain = nearest_station_precip(lat, lon, aemet_stations, aemet_precip)
 
         if aemet_rain is not None:
             aemet_hits += 1
-            rain10d    = aemet_rain                         # real measurement
-            rain7d     = aemet_rain * (7 / 14)             # proportional estimate
-            rain14d    = aemet_rain
-            days_since = om_w["days_since"]                 # from Open-Meteo
-        else:
-            rain10d    = om_w["rain10d"]
-            rain7d     = om_w["rain7d"]
-            rain14d    = om_w["rain14d"]
-            days_since = om_w["days_since"]
 
         weather = {
-            "rain10d":    round(rain10d, 2),
-            "rain7d":     round(rain7d, 2),
-            "rain14d":    round(rain14d, 2),
-            "temp7d":     om_w["temp7d"],
-            "hum7d":      om_w["hum7d"],
-            "days_since": days_since,
+            "soil_moist_7d":    om_w["soil_moist_7d"],
+            "soil_temp_7d":     om_w["soil_temp_7d"],
+            "soil_temp_drop":   om_w["soil_temp_drop"],
+            "rain14d":          round(aemet_rain, 1) if aemet_rain is not None else om_w["rain14d"],
+            "rain_trigger_mm":  om_w["rain_trigger_mm"],
+            "trigger_days_ago": om_w["trigger_days_ago"],
         }
 
         score = compute_score(weather, props, month)
         zones_out[zone_id] = [
-            score, weather["rain10d"], weather["temp7d"],
-            weather["hum7d"], weather["rain7d"], weather["rain14d"],
-            weather["days_since"],
+            score,
+            weather["soil_moist_7d"],
+            weather["soil_temp_7d"],
+            weather["soil_temp_drop"],
+            weather["rain14d"],
+            weather["rain_trigger_mm"],
+            weather["trigger_days_ago"],
         ]
 
     output = {
-        "v":          1,
+        "v":          2,
         "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "month":      month,
         "zones":      zones_out,

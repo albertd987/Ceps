@@ -10,10 +10,8 @@ data class OpenMeteoResponse(
 
 @Serializable
 data class DailyDto(
-    @SerialName("time") val time: List<String>,
-    @SerialName("precipitation_sum") val precipitationSum: List<Double>,
-    @SerialName("temperature_2m_mean") val temperatureMean: List<Double>,
-    @SerialName("temperature_2m_max") val temperatureMax: List<Double>,
-    @SerialName("temperature_2m_min") val temperatureMin: List<Double>,
-    @SerialName("relative_humidity_2m_mean") val humidityMean: List<Double>
+    @SerialName("time")                            val time: List<String>,
+    @SerialName("precipitation_sum")               val precipitationSum: List<Double>,
+    @SerialName("soil_temperature_0_to_7cm_mean")  val soilTemperature: List<Double?>,
+    @SerialName("soil_moisture_0_to_7cm_mean")     val soilMoisture: List<Double?>
 )
