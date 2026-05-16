@@ -1,59 +1,87 @@
 """
-One-time script: adds soil_ph to each zone in forest_zones.geojson via SoilGrids v2.0.
-SoilGrids is static (last updated 2020) so this only needs to run once.
+One-time script: adds soil_ph to each zone in forest_zones.geojson.
 
-Usage: python tools/build_geojson/enrich_soil_ph.py
+Uses SoilGrids WCS to download a single GeoTIFF for the whole Pyrenees bbox,
+then samples pH locally with rasterio. No rate limits, ~30 seconds total.
 
-Runtime: ~15-20 min for 5144 zones (de-duplicated to ~1000 unique grid cells).
-Results are cached in soil_ph_cache.json to allow resuming after interruptions.
+Usage:
+    pip install requests rasterio
+    python tools/build_geojson/enrich_soil_ph.py
+
+SoilGrids is static (last updated 2020) — soil pH does not change on human
+timescales, so this only needs to run once.
 """
 import json
 import sys
-import time
+import tempfile
 from pathlib import Path
 
 import requests
+import rasterio
+from rasterio.transform import rowcol
 
 GEOJSON_PATH = Path(__file__).parent.parent.parent / "app/src/main/assets/forest_zones.geojson"
-CACHE_PATH   = Path(__file__).parent / "soil_ph_cache.json"
-API_URL      = "https://rest.isric.org/soilgrids/v2.0/properties/query"
 
-RATE_LIMIT   = 0.12   # seconds between requests (~8 req/s, below 10 req/s limit)
-MAX_RETRIES  = 3
-DEFAULT_PH   = 5.5    # slightly acidic fallback when API unavailable
+# SoilGrids WCS — phh2o (pH in H2O), 0–5 cm depth, mean
+# Returns pH × 10 (e.g. pixel value 65 = pH 6.5)
+WCS_URL = "https://maps.isric.org/mapserv"
+WCS_PARAMS = {
+    "map":        "/map/phh2o.map",
+    "SERVICE":    "WCS",
+    "VERSION":    "2.0.1",
+    "REQUEST":    "GetCoverage",
+    "COVERAGEID": "phh2o_0-5cm_mean",
+    "FORMAT":     "image/tiff",
+    # Pyrenees bounding box with margin (lat/lon order for EPSG:4326)
+    "SUBSET":     ["Y(41.5,43.5)", "X(-0.5,4.0)"],
+    "SUBSETTINGCRS": "http://www.opengis.net/def/crs/EPSG/0/4326",
+    "OUTPUTCRS":     "http://www.opengis.net/def/crs/EPSG/0/4326",
+}
+
+DEFAULT_PH = 5.5   # fallback if a centroid falls outside the raster
 
 
-def _cache_key(lat: float, lon: float) -> str:
-    # Round to 2 decimal places (~1 km grid) — SoilGrids resolution is 250 m,
-    # so 1 km de-duplication loses no meaningful precision.
-    return f"{round(lat, 2)},{round(lon, 2)}"
+def download_tiff(out_path: Path) -> None:
+    print("Downloading SoilGrids pH GeoTIFF (single request)...")
+    # requests doesn't support repeated keys natively, so build URL manually
+    base = f"{WCS_URL}?map={WCS_PARAMS['map']}"
+    params = (
+        f"&SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage"
+        f"&COVERAGEID={WCS_PARAMS['COVERAGEID']}"
+        f"&FORMAT=image/tiff"
+        f"&SUBSET=Y(41.5,43.5)&SUBSET=X(-0.5,4.0)"
+        f"&SUBSETTINGCRS=http://www.opengis.net/def/crs/EPSG/0/4326"
+        f"&OUTPUTCRS=http://www.opengis.net/def/crs/EPSG/0/4326"
+    )
+    url = base + params
+    r = requests.get(url, timeout=120, stream=True)
+    r.raise_for_status()
+    content_type = r.headers.get("Content-Type", "")
+    if "tiff" not in content_type and "octet-stream" not in content_type:
+        snippet = r.text[:500]
+        print(f"Unexpected Content-Type: {content_type}", file=sys.stderr)
+        print(f"Response: {snippet}", file=sys.stderr)
+        raise RuntimeError("WCS did not return a TIFF — see error above")
+    with open(out_path, "wb") as f:
+        for chunk in r.iter_content(chunk_size=65536):
+            f.write(chunk)
+    size_kb = out_path.stat().st_size // 1024
+    print(f"Downloaded {size_kb} KB -> {out_path}")
 
 
-def fetch_ph(lat: float, lon: float) -> float:
-    params = {
-        "lon":      lon,
-        "lat":      lat,
-        "property": "phh2o",
-        "depth":    "0-5cm",
-        "value":    "mean",
-    }
-    for attempt in range(MAX_RETRIES):
-        try:
-            r = requests.get(API_URL, params=params, timeout=20)
-            r.raise_for_status()
-            data = r.json()
-            # SoilGrids returns pH * 10 (e.g. 65 = pH 6.5)
-            val = data["properties"]["layers"][0]["depths"][0]["values"]["mean"]
-            return round(val / 10, 1) if val is not None else DEFAULT_PH
-        except Exception as e:
-            wait = 5 * (2 ** attempt)
-            if attempt < MAX_RETRIES - 1:
-                print(f"  Retry {attempt+1} ({lat},{lon}): {e} — waiting {wait}s", file=sys.stderr)
-                time.sleep(wait)
-            else:
-                print(f"  WARN: failed for ({lat},{lon}), using default {DEFAULT_PH}", file=sys.stderr)
-                return DEFAULT_PH
-    return DEFAULT_PH
+def sample_ph(tiff_path: Path, lat: float, lon: float) -> float:
+    with rasterio.open(tiff_path) as src:
+        # Convert lat/lon to pixel row/col
+        row, col = rowcol(src.transform, lon, lat)
+        if row < 0 or col < 0 or row >= src.height or col >= src.width:
+            return DEFAULT_PH
+        val = src.read(1)[row, col]
+        nodata = src.nodata
+        if nodata is not None and val == nodata:
+            return DEFAULT_PH
+        if val <= 0:
+            return DEFAULT_PH
+        return round(val / 10.0, 1)   # SoilGrids stores pH * 10
 
 
 def main():
@@ -63,66 +91,31 @@ def main():
     features = geojson["features"]
     print(f"Loaded {len(features)} zones")
 
-    # Load cache
-    cache: dict[str, float] = {}
-    if CACHE_PATH.exists():
-        with open(CACHE_PATH, encoding="utf-8") as f:
-            cache = json.load(f)
-        print(f"Cache loaded: {len(cache)} entries")
+    with tempfile.TemporaryDirectory() as tmp:
+        tiff_path = Path(tmp) / "phh2o.tiff"
+        download_tiff(tiff_path)
 
-    # Collect unique grid cells
-    unique_keys = {}
-    for feat in features:
-        p = feat["properties"]
-        key = _cache_key(p["centroid_lat"], p["centroid_lon"])
-        if key not in cache and key not in unique_keys:
-            unique_keys[key] = (p["centroid_lat"], p["centroid_lon"])
+        print("Sampling pH for each zone centroid...")
+        for i, feat in enumerate(features, 1):
+            p = feat["properties"]
+            ph = sample_ph(tiff_path, p["centroid_lat"], p["centroid_lon"])
+            p["soil_ph"] = ph
+            if i % 500 == 0:
+                print(f"  {i}/{len(features)} zones processed...")
 
-    total_to_fetch = len(unique_keys)
-    print(f"Unique cells to fetch: {total_to_fetch} (cached: {len(cache)})")
-
-    # Fetch missing cells
-    for i, (key, (lat, lon)) in enumerate(unique_keys.items(), 1):
-        if i % 50 == 0 or i == 1:
-            print(f"  [{i}/{total_to_fetch}] fetching ({lat}, {lon})...")
-        ph = fetch_ph(lat, lon)
-        cache[key] = ph
-        time.sleep(RATE_LIMIT)
-        # Save cache periodically
-        if i % 100 == 0:
-            with open(CACHE_PATH, "w", encoding="utf-8") as f:
-                json.dump(cache, f)
-
-    # Final cache save
-    with open(CACHE_PATH, "w", encoding="utf-8") as f:
-        json.dump(cache, f)
-    print(f"Cache saved ({len(cache)} entries)")
-
-    # Enrich features
-    not_found = 0
-    for feat in features:
-        p = feat["properties"]
-        key = _cache_key(p["centroid_lat"], p["centroid_lon"])
-        ph = cache.get(key, DEFAULT_PH)
-        if key not in cache:
-            not_found += 1
-        p["soil_ph"] = ph
-
-    if not_found:
-        print(f"WARNING: {not_found} zones used default pH (cache miss)", file=sys.stderr)
-
-    # Write enriched GeoJSON
     with open(GEOJSON_PATH, "w", encoding="utf-8") as f:
         json.dump(geojson, f, separators=(",", ":"))
-    print(f"Done. Written {len(features)} zones with soil_ph to {GEOJSON_PATH}")
+    print(f"Done. Written {len(features)} zones with soil_ph.")
 
-    # Quick stats
     phs = [feat["properties"]["soil_ph"] for feat in features]
-    print(f"pH range: {min(phs):.1f} – {max(phs):.1f}, mean: {sum(phs)/len(phs):.1f}")
-    acidic  = sum(1 for p in phs if p < 6.0)
-    neutral = sum(1 for p in phs if 6.0 <= p < 7.0)
+    acidic   = sum(1 for p in phs if p < 6.0)
+    neutral  = sum(1 for p in phs if 6.0 <= p < 7.0)
     alkaline = sum(1 for p in phs if p >= 7.0)
-    print(f"Acidic (<6): {acidic}, Neutral (6-7): {neutral}, Alkaline (>=7): {alkaline}")
+    defaults = sum(1 for p in phs if p == DEFAULT_PH)
+    print(f"pH range: {min(phs):.1f} - {max(phs):.1f},  mean: {sum(phs)/len(phs):.1f}")
+    print(f"Acidic (<6.0): {acidic}  |  Neutral (6-7): {neutral}  |  Alkaline (>=7): {alkaline}")
+    if defaults:
+        print(f"WARNING: {defaults} zones used default pH {DEFAULT_PH} (outside raster bounds)")
 
 
 if __name__ == "__main__":
