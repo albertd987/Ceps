@@ -1,5 +1,6 @@
 package com.cepalert.ui.map
 
+import android.graphics.Color
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,24 +36,22 @@ import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
+import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.Point
 import com.cepalert.ui.detail.ZoneDetailSheet
 import com.cepalert.ui.weather.WeatherBottomSheet
-import com.cepalert.ui.map.ScoredZone
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-private fun scoreColorHex(score: Int?): String = when {
-    score == null -> "#9E9E9E"
-    score >= 67 -> "#1B5E20"
-    score >= 34 -> "#F9A825"
-    else -> "#9E9E9E"
-}
+private const val SOURCE_ID = "zones-source"
+private const val LAYER_ID = "zones-layer"
+private const val PROP_SCORE = "score"
 
 @Composable
 fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
@@ -87,63 +86,73 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                                 .target(LatLng(42.4, 1.5))
                                 .zoom(8.0)
                                 .build()
+                            // Single click listener registered once; reads zones from tag
+                            map.addOnMapClickListener { latLng ->
+                                @Suppress("UNCHECKED_CAST")
+                                val zones = (this.tag as? List<ScoredZone>)
+                                    ?: return@addOnMapClickListener false
+                                val nearest = zones.minByOrNull { sz ->
+                                    val dLat = sz.zone.centroidLat - latLng.latitude
+                                    val dLon = sz.zone.centroidLon - latLng.longitude
+                                    dLat * dLat + dLon * dLon
+                                }
+                                nearest?.let { sz ->
+                                    val dLat = sz.zone.centroidLat - latLng.latitude
+                                    val dLon = sz.zone.centroidLon - latLng.longitude
+                                    if (dLat * dLat + dLon * dLon < 0.01) {
+                                        selectedZoneState.value = sz
+                                    }
+                                }
+                                false
+                            }
                         }
                     }
                 },
                 update = { mapView ->
-                    mapView.getMapAsync { map ->
-                        val style = map.style ?: return@getMapAsync
-                        state.scoredZones.forEachIndexed { index, scoredZone ->
-                            val sourceId = "zone-source-$index"
-                            val layerId = "zone-layer-$index"
-                            if (style.getSource(sourceId) == null) {
-                                style.addSource(
-                                    GeoJsonSource(
-                                        sourceId,
-                                        Feature.fromGeometry(
-                                            Point.fromLngLat(
-                                                scoredZone.zone.centroidLon,
-                                                scoredZone.zone.centroidLat
-                                            )
-                                        )
-                                    )
-                                )
-                                style.addLayer(
-                                    CircleLayer(layerId, sourceId).apply {
-                                        setProperties(
-                                            PropertyFactory.circleRadius(10f),
-                                            PropertyFactory.circleColor(
-                                                scoreColorHex(scoredZone.score?.score)
-                                            ),
-                                            PropertyFactory.circleOpacity(0.8f)
-                                        )
+                    // Keep click listener up-to-date without re-registering it
+                    mapView.tag = state.scoredZones
+
+                    val zonesToRender = state.scoredZones
+                    if (zonesToRender.isNotEmpty()) {
+                        mapView.getMapAsync { map ->
+                            map.getStyle { style ->
+                                val features = zonesToRender.map { sz ->
+                                    Feature.fromGeometry(
+                                        Point.fromLngLat(sz.zone.centroidLon, sz.zone.centroidLat)
+                                    ).also { f ->
+                                        f.addNumberProperty(PROP_SCORE, sz.score?.score ?: -1)
                                     }
-                                )
-                            }
-                        }
-                        // Register click listener with fresh state snapshot
-                        val zones = state.scoredZones
-                        map.addOnMapClickListener { latLng ->
-                            val nearest = zones.minByOrNull { sz ->
-                                val dLat = sz.zone.centroidLat - latLng.latitude
-                                val dLon = sz.zone.centroidLon - latLng.longitude
-                                dLat * dLat + dLon * dLon
-                            }
-                            nearest?.let { sz ->
-                                val dLat = sz.zone.centroidLat - latLng.latitude
-                                val dLon = sz.zone.centroidLon - latLng.longitude
-                                if (dLat * dLat + dLon * dLon < 0.01) {
-                                    selectedZoneState.value = sz
+                                }
+                                val collection = FeatureCollection.fromFeatures(features)
+                                val existing = style.getSource(SOURCE_ID) as? GeoJsonSource
+                                if (existing != null) {
+                                    existing.setGeoJson(collection)
+                                } else {
+                                    style.addSource(GeoJsonSource(SOURCE_ID, collection))
+                                    style.addLayer(
+                                        CircleLayer(LAYER_ID, SOURCE_ID).apply {
+                                            setProperties(
+                                                PropertyFactory.circleRadius(10f),
+                                                PropertyFactory.circleOpacity(0.8f),
+                                                PropertyFactory.circleColor(
+                                                    Expression.step(
+                                                        Expression.get(PROP_SCORE),
+                                                        Expression.color(Color.parseColor("#9E9E9E")),
+                                                        Expression.literal(34), Expression.color(Color.parseColor("#F9A825")),
+                                                        Expression.literal(67), Expression.color(Color.parseColor("#1B5E20"))
+                                                    )
+                                                )
+                                            )
+                                        }
+                                    )
                                 }
                             }
-                            false
                         }
                     }
                 },
                 modifier = Modifier.fillMaxSize()
             )
 
-            // Date chip top-start
             AssistChip(
                 onClick = {},
                 label = { Text(dateLabel) },
@@ -152,7 +161,6 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                     .padding(8.dp)
             )
 
-            // Loading spinner
             if (state.isLoading) {
                 CircularProgressIndicator(Modifier.align(Alignment.Center))
             } else if (state.error != null) {
@@ -173,7 +181,6 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                 }
             }
 
-            // Bottom conditions banner
             state.weather?.let { weather ->
                 Surface(
                     modifier = Modifier
@@ -196,7 +203,6 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                 }
             }
 
-            // Weather bottom sheet
             if (showWeatherSheet) {
                 state.weather?.let { weather ->
                     WeatherBottomSheet(
@@ -206,7 +212,6 @@ fun MapScreen(viewModel: MapViewModel = hiltViewModel()) {
                 }
             }
 
-            // Zone detail bottom sheet
             selectedZone?.let { zone ->
                 ZoneDetailSheet(
                     scoredZone = zone,
