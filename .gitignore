@@ -16,3 +16,4 @@ tools/compute_scores/output/
 tools/compute_scores/__pycache__/
 .kotlin/
 app/hs_err_pid*.log
+.superpowers/
