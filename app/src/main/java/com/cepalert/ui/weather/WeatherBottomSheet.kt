@@ -38,39 +38,33 @@ fun WeatherBottomSheet(
                 .padding(horizontal = 24.dp, vertical = 16.dp)
         ) {
             Text(
-                "Condiciones meteorológicas",
+                "Condicions meteorològiques",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
 
             Spacer(Modifier.height(16.dp))
 
-            WeatherRow("Lluvia 7 días", "${weather.rain7dTotal.toInt()} mm")
-            WeatherRow("Lluvia 14 días", "${weather.rain14dTotal.toInt()} mm")
+            WeatherRow("Humitat sòl 7d", "${"%.0f".format(weather.soilMoisture7d * 100)} %")
+            WeatherRow("Temp. sòl 7d", "${"%.1f".format(weather.soilTemp7d)} °C")
+            WeatherRow("Refredament sòl", "${"%.1f".format(weather.soilTempDrop)} °C")
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            WeatherRow(
-                "Temperatura 7d",
-                "máx ${weather.temp7dMax.toInt()} / mín ${weather.temp7dMin.toInt()} / media ${weather.temp7dAvg.toInt()} °C"
-            )
-            WeatherRow("Humedad media 7d", "${weather.humidity7dAvg.toInt()} %")
+            WeatherRow("Pluja 14d", "${weather.rain14dTotal.toInt()} mm")
+            val triggerText = if (weather.rainTriggerMm >= 10.0)
+                "${"%.0f".format(weather.rainTriggerMm)} mm fa ${weather.triggerDaysAgo} dies"
+            else "Sense detonant"
+            WeatherRow("Detonant de pluja", triggerText)
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            WeatherRow(
-                "Días sin lluvia significativa (>10 mm)",
-                "${weather.daysSinceSignificantRain}"
-            )
-
-            Spacer(Modifier.height(8.dp))
 
             val formattedDate = remember(weather.updatedAtEpochMs) {
                 SimpleDateFormat("dd/MM HH:mm", Locale.getDefault())
                     .format(Date(weather.updatedAtEpochMs))
             }
             Text(
-                "Fuente: ${weather.source} · Actualizado: $formattedDate",
+                "Font: ${weather.source} · Actualitzat: $formattedDate",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
