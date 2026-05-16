@@ -1,9 +1,9 @@
 """Maps MFE50 dominant-species names to compatibility for Boletus edulis."""
 
 _COMPATIBLE = {
-    "pino": ("pin", "pinus"),
-    "haya": ("fag", "fagus", "haya"),
-    "roble": ("quercus", "roure", "roble"),
+    "pino": ("pin", "pinus", "coní", "coni"),   # Pinares + Mezclas de coníferas
+    "haya": ("fag", "fagus", "haya", "hayedo"),
+    "roble": ("quercus", "roure", "roble", "quejigar", "alcornoc", "encinar"),
 }
 
 
