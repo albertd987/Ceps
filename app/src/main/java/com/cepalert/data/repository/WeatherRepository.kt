@@ -1,5 +1,6 @@
 package com.cepalert.data.repository
 
+import android.util.Log
 import com.cepalert.data.api.OpenMeteoApi
 import com.cepalert.data.api.OpenMeteoResponse
 import com.cepalert.data.model.WeatherData

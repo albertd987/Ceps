@@ -12,5 +12,7 @@ google-services.json
 # Pipeline data (large binary source files, not generated assets)
 tools/build_geojson/data/
 tools/build_geojson/__pycache__/
+tools/compute_scores/output/
+tools/compute_scores/__pycache__/
 .kotlin/
 app/hs_err_pid*.log

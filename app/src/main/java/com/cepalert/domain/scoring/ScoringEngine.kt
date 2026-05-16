@@ -21,25 +21,80 @@ object ScoringEngine {
         else -> (1.0 - (tempC - 20.0) / 10.0).coerceIn(0.0, 1.0)
     }
 
+    // Optimal: 900–1800m. Below 600m penalized (too warm), above 2100m penalized (sparse forest).
+    fun normalizeAltitude(m: Int): Double = when {
+        m in 900..1800 -> 1.0
+        m < 900 -> ((m - 400.0) / 500.0).coerceIn(0.0, 1.0)
+        m <= 2100 -> 1.0 - ((m - 1800.0) / 300.0)
+        else -> 0.0
+    }
+
+    // N/NE retain moisture best; S/SW are driest
+    fun normalizeOrientation(o: String): Double = when (o.uppercase()) {
+        "N"  -> 1.0
+        "NE" -> 0.85
+        "NW" -> 0.75
+        "E"  -> 0.6
+        "W"  -> 0.5
+        "SE" -> 0.35
+        "SW" -> 0.2
+        "S"  -> 0.1
+        else -> 0.5  // unknown
+    }
+
+    // Boletus edulis Pyrenees: peak October, viable Sept–Nov, rare otherwise
+    fun seasonalFactor(month: Int): Double = when (month) {
+        10 -> 1.0
+        9  -> 0.8
+        11 -> 0.7
+        8  -> 0.3
+        12 -> 0.25
+        5  -> 0.25
+        4  -> 0.15
+        6  -> 0.15
+        7  -> 0.1
+        else -> 0.1  // Jan, Feb, Mar
+    }
+
+    private val MONTH_NAMES = mapOf(
+        1 to "Gener", 2 to "Febrer", 3 to "Març", 4 to "Abril",
+        5 to "Maig", 6 to "Juny", 7 to "Juliol", 8 to "Agost",
+        9 to "Setembre", 10 to "Octubre", 11 to "Novembre", 12 to "Desembre"
+    )
+
     fun score(
         weather: com.cepalert.data.model.WeatherData,
-        zone: com.cepalert.data.model.ForestZone
+        zone: com.cepalert.data.model.ForestZone,
+        month: Int
     ): com.cepalert.data.model.ScoreResult {
-        val nHumidity = normalizeHumidity(weather.humidity7dAvg)
-        val nRain = normalizeRain10d(weather.rain10dTotal)
-        val nForest = if (zone.bosqueCompatible) 1.0 else 0.0
-        val nTemp = normalizeTemperature(weather.temp7dAvg)
+        val nHumidity    = normalizeHumidity(weather.humidity7dAvg)
+        val nRain        = normalizeRain10d(weather.rain10dTotal)
+        val nForest      = if (zone.bosqueCompatible) 1.0 else 0.0
+        val nTemp        = normalizeTemperature(weather.temp7dAvg)
+        val nAltitude    = normalizeAltitude(zone.altitud)
+        val nOrientation = normalizeOrientation(zone.orientacion)
+        val nSeason      = seasonalFactor(month)
 
-        val total = nHumidity * 0.4 + nRain * 0.3 + nForest * 0.2 + nTemp * 0.1
+        // Weights sum to 1.0; season applied as multiplier
+        val base = nHumidity * 0.35 + nRain * 0.25 + nForest * 0.15 +
+                   nTemp * 0.1 + nAltitude * 0.1 + nOrientation * 0.05
+        val total = base * nSeason
+
         val rows = listOf(
             com.cepalert.data.model.ScoreBreakdownRow(
-                "Humedad", "${weather.humidity7dAvg.toInt()} %", nHumidity, 0.4),
+                "Humitat", "${weather.humidity7dAvg.toInt()} %", nHumidity, 0.35),
             com.cepalert.data.model.ScoreBreakdownRow(
-                "Lluvia 10d", "${weather.rain10dTotal.toInt()} mm", nRain, 0.3),
+                "Pluja 10d", "${weather.rain10dTotal.toInt()} mm", nRain, 0.25),
             com.cepalert.data.model.ScoreBreakdownRow(
-                "Tipo de bosque", zone.bosqueTipo, nForest, 0.2),
+                "Tipus de bosc", zone.bosqueTipo, nForest, 0.15),
             com.cepalert.data.model.ScoreBreakdownRow(
                 "Temperatura", "${weather.temp7dAvg.toInt()} °C", nTemp, 0.1),
+            com.cepalert.data.model.ScoreBreakdownRow(
+                "Altitud", "${zone.altitud} m", nAltitude, 0.1),
+            com.cepalert.data.model.ScoreBreakdownRow(
+                "Orientació", zone.orientacion, nOrientation, 0.05),
+            com.cepalert.data.model.ScoreBreakdownRow(
+                "Estació", MONTH_NAMES[month] ?: "$month", nSeason, 0.0),
         )
         return com.cepalert.data.model.ScoreResult(
             zoneId = zone.id,
