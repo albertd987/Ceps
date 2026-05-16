@@ -66,34 +66,25 @@ class MapViewModel @Inject constructor(
     private suspend fun fetchAndScore() {
         runCatching {
             val zones = forestRepository.loadZones()
-            var representativeWeather: WeatherData? = null
+            val centerLat = zones.map { it.centroidLat }.average()
+            val centerLon = zones.map { it.centroidLon }.average()
+            val weather = runCatching {
+                weatherRepository.getWeather(centerLat, centerLon)
+            }.getOrNull()
             val scored = zones.map { zone ->
-                val weather = runCatching {
-                    weatherRepository.getWeather(zone.centroidLat, zone.centroidLon)
-                }.getOrNull()
-                if (weather != null && representativeWeather == null) {
-                    representativeWeather = weather
-                }
-                ScoredZone(
-                    zone = zone,
-                    score = weather?.let { ScoringEngine.score(it, zone) }
-                )
+                ScoredZone(zone = zone, score = weather?.let { ScoringEngine.score(it, zone) })
             }
-            if (representativeWeather != null) {
+            if (weather != null) {
                 scoreCache.write(
                     CachedScores(
                         savedAtEpochMs = System.currentTimeMillis(),
-                        weather = representativeWeather!!,
+                        weather = weather,
                         scores = scored.mapNotNull { it.score }
                     )
                 )
             }
             _uiState.update {
-                it.copy(
-                    isLoading = false,
-                    scoredZones = scored,
-                    weather = representativeWeather
-                )
+                it.copy(isLoading = false, scoredZones = scored, weather = weather)
             }
         }.onFailure { e ->
             _uiState.update {
