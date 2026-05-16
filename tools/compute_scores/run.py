@@ -27,10 +27,10 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
 LAT_MIN, LAT_MAX = 42.0, 42.9
 LON_MIN, LON_MAX = 0.4,  3.3
-GRID_ROWS = 10
-GRID_COLS = 20
+GRID_ROWS = 5
+GRID_COLS = 10
 
-RATE_LIMIT_S = 0.5
+RATE_LIMIT_S = 1.0
 MAX_RETRIES  = 3
 
 
@@ -77,10 +77,12 @@ def fetch_om_weather(lat: float, lon: float) -> dict | None:
                 "days_since": days_since,
             }
         except Exception as e:
+            wait = 10 * (2 ** attempt)
             if attempt < MAX_RETRIES - 1:
-                time.sleep(5 * (2 ** attempt))
+                print(f"  Retry {attempt+1} ({lat:.2f},{lon:.2f}), waiting {wait}s...", file=sys.stderr)
+                time.sleep(wait)
             else:
-                print(f"  WARN: OM cell ({lat:.2f},{lon:.2f}) failed: {e}", file=sys.stderr)
+                print(f"  WARN: OM cell ({lat:.2f},{lon:.2f}) failed after {MAX_RETRIES} retries", file=sys.stderr)
                 return None
 
 
