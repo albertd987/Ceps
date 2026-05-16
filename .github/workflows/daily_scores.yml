@@ -1,0 +1,50 @@
+name: Daily Score Computation
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 06:00 UTC every day
+  workflow_dispatch:        # manual trigger from GitHub UI
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  compute-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: tools/compute_scores/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r tools/compute_scores/requirements.txt
+
+      - name: Compute scores
+        run: python tools/compute_scores/run.py
+        env:
+          AEMET_API_KEY: ${{ secrets.AEMET_API_KEY }}
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: tools/compute_scores/output/
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
