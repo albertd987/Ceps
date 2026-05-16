@@ -1,10 +1,10 @@
 """
-Fetches per-zone weather from Open-Meteo and computes scores for all forest zones.
-Outputs output/scores.json — deployed to GitHub Pages by the CI workflow.
-Runtime: ~10 min for 5144 zones (0.1s rate limit between calls).
+Computes per-zone scores using a geographic grid of weather cells.
+Instead of 5144 API calls, we use a 5×10 grid (~50 cells) over the Pyrenees.
+Weather resolution: ~20km × 24km per cell — sufficient for precipitation patterns.
+Runtime: ~30 seconds.
 """
 import json
-import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -17,21 +17,27 @@ from scoring import compute_score
 GEOJSON_PATH = Path(__file__).parent.parent.parent / "app/src/main/assets/forest_zones.geojson"
 OUT_DIR      = Path(__file__).parent / "output"
 OUT_PATH     = OUT_DIR / "scores.json"
-CHECKPOINT   = Path(__file__).parent / "output" / "checkpoint.json"
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
-RATE_LIMIT_S   = 0.1   # seconds between requests
-MAX_RETRIES    = 3
+
+# Grid covering Catalan Pyrenees + surroundings
+LAT_MIN, LAT_MAX = 42.0, 42.9
+LON_MIN, LON_MAX = 0.4, 3.3
+GRID_ROWS = 5
+GRID_COLS = 10
+
+RATE_LIMIT_S = 0.5
+MAX_RETRIES  = 3
 
 
 def fetch_weather(lat: float, lon: float) -> dict | None:
     params = {
-        "latitude":       lat,
-        "longitude":      lon,
-        "daily":          "precipitation_sum,temperature_2m_mean,temperature_2m_max,temperature_2m_min,relative_humidity_2m_mean",
-        "past_days":      14,
-        "forecast_days":  0,
-        "timezone":       "Europe/Madrid",
+        "latitude":      lat,
+        "longitude":     lon,
+        "daily":         "precipitation_sum,temperature_2m_mean,temperature_2m_max,temperature_2m_min,relative_humidity_2m_mean",
+        "past_days":     14,
+        "forecast_days": 0,
+        "timezone":      "Europe/Madrid",
     }
     for attempt in range(MAX_RETRIES):
         try:
@@ -64,11 +70,50 @@ def fetch_weather(lat: float, lon: float) -> dict | None:
                 "days_since": days_since,
             }
         except Exception as e:
+            wait = 5 * (2 ** attempt)
             if attempt < MAX_RETRIES - 1:
-                time.sleep(2 ** attempt)
+                print(f"  Retry {attempt+1} for ({lat:.2f},{lon:.2f}): {e} — waiting {wait}s", file=sys.stderr)
+                time.sleep(wait)
             else:
-                print(f"  WARN: failed after {MAX_RETRIES} retries — {e}", file=sys.stderr)
+                print(f"  WARN: cell ({lat:.2f},{lon:.2f}) failed after {MAX_RETRIES} retries", file=sys.stderr)
                 return None
+
+
+def build_grid() -> dict[tuple[int, int], dict | None]:
+    """Fetch weather for each grid cell. Returns {(row, col): weather_dict}."""
+    lat_step = (LAT_MAX - LAT_MIN) / GRID_ROWS
+    lon_step = (LON_MAX - LON_MIN) / GRID_COLS
+
+    grid = {}
+    total = GRID_ROWS * GRID_COLS
+    for row in range(GRID_ROWS):
+        for col in range(GRID_COLS):
+            lat = LAT_MIN + (row + 0.5) * lat_step
+            lon = LON_MIN + (col + 0.5) * lon_step
+            idx = row * GRID_COLS + col
+            print(f"  Fetching cell {idx+1}/{total} lat={lat:.2f} lon={lon:.2f}")
+            grid[(row, col)] = fetch_weather(lat, lon)
+            time.sleep(RATE_LIMIT_S)
+    return grid
+
+
+def nearest_cell(lat: float, lon: float) -> tuple[int, int]:
+    lat_step = (LAT_MAX - LAT_MIN) / GRID_ROWS
+    lon_step = (LON_MAX - LON_MIN) / GRID_COLS
+    row = int((lat - LAT_MIN) / lat_step)
+    col = int((lon - LON_MIN) / lon_step)
+    return (
+        max(0, min(GRID_ROWS - 1, row)),
+        max(0, min(GRID_COLS - 1, col)),
+    )
+
+
+def fallback_weather(grid: dict) -> dict:
+    """Regional average from all successful cells — used if a zone's cell failed."""
+    values = [w for w in grid.values() if w is not None]
+    if not values:
+        return {"rain10d": 0, "rain7d": 0, "rain14d": 0, "temp7d": 15, "hum7d": 60, "days_since": 30}
+    return {k: round(sum(v[k] for v in values) / len(values), 2) for k in values[0]}
 
 
 def main():
@@ -81,40 +126,26 @@ def main():
 
     month = datetime.now(timezone.utc).month
 
-    # Load checkpoint to resume interrupted runs
-    done: dict[str, list] = {}
-    if CHECKPOINT.exists():
-        with open(CHECKPOINT, encoding="utf-8") as f:
-            done = json.load(f)
-        print(f"Resuming from checkpoint: {len(done)} zones already done")
+    print(f"\nFetching weather grid ({GRID_ROWS}×{GRID_COLS} = {GRID_ROWS*GRID_COLS} cells)...")
+    grid = build_grid()
+    ok_cells = sum(1 for w in grid.values() if w is not None)
+    print(f"Grid done: {ok_cells}/{GRID_ROWS*GRID_COLS} cells successful\n")
 
-    total   = len(features)
-    skipped = 0
-    failed  = 0
+    fallback = fallback_weather(grid)
 
-    for i, feat in enumerate(features):
+    print("Computing scores...")
+    zones_out = {}
+    for feat in features:
         props   = feat["properties"]
         zone_id = props["id"]
+        lat     = props["centroid_lat"]
+        lon     = props["centroid_lon"]
 
-        if zone_id in done:
-            skipped += 1
-            continue
-
-        lat = props["centroid_lat"]
-        lon = props["centroid_lon"]
-
-        weather = fetch_weather(lat, lon)
-        time.sleep(RATE_LIMIT_S)
-
-        if weather is None:
-            failed += 1
-            # Store score=0 so the zone still renders (gray)
-            done[zone_id] = [0, 0.0, 15.0, 60.0, 0.0, 0.0, 30]
-            continue
+        cell    = nearest_cell(lat, lon)
+        weather = grid.get(cell) or fallback
 
         score = compute_score(weather, props, month)
-        # Array: [score, rain10d, temp7d, hum7d, rain7d, rain14d, days_since]
-        done[zone_id] = [
+        zones_out[zone_id] = [
             score,
             weather["rain10d"],
             weather["temp7d"],
@@ -124,27 +155,19 @@ def main():
             weather["days_since"],
         ]
 
-        # Save checkpoint every 100 zones
-        if (i + 1) % 100 == 0:
-            with open(CHECKPOINT, "w", encoding="utf-8") as f:
-                json.dump(done, f, separators=(",", ":"))
-            pct = (i + 1) / total * 100
-            print(f"  {i+1}/{total} ({pct:.0f}%) — {failed} failed so far")
-
     output = {
         "v":          1,
         "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "month":      month,
-        "zones":      done,
+        "zones":      zones_out,
     }
     with open(OUT_PATH, "w", encoding="utf-8") as f:
         json.dump(output, f, separators=(",", ":"))
 
-    # Clean up checkpoint on success
-    if CHECKPOINT.exists():
-        CHECKPOINT.unlink()
-
-    print(f"Done. {len(done)} zones written to {OUT_PATH} ({failed} failed)")
+    print(f"Done. {len(zones_out)} zones written to {OUT_PATH}")
+    failed_cells = GRID_ROWS * GRID_COLS - ok_cells
+    if failed_cells:
+        print(f"WARNING: {failed_cells} grid cells failed — those zones used regional average")
 
 
 if __name__ == "__main__":
