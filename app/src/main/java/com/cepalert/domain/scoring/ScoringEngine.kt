@@ -21,12 +21,21 @@ object ScoringEngine {
         else -> (1.0 - (tempC - 20.0) / 10.0).coerceIn(0.0, 1.0)
     }
 
-    // Optimal: 900–1800m. Below 600m penalized (too warm), above 2100m penalized (sparse forest).
+    // Bell curve: viable 500–2200m, peak 900–1500m. Below 500m too warm/wrong forest.
     fun normalizeAltitude(m: Int): Double = when {
-        m in 900..1800 -> 1.0
-        m < 900 -> ((m - 400.0) / 500.0).coerceIn(0.0, 1.0)
-        m <= 2100 -> 1.0 - ((m - 1800.0) / 300.0)
+        m < 500  -> 0.0
+        m < 900  -> ((m - 500.0) / 400.0).coerceIn(0.0, 1.0)
+        m <= 1500 -> 1.0
+        m <= 2200 -> (1.0 - ((m - 1500.0) / 700.0)).coerceIn(0.0, 1.0)
         else -> 0.0
+    }
+
+    // Beech best (mycorrhiza + moisture), pine good, oak decent (lower altitude)
+    fun normalizeForest(tipo: String): Double = when (tipo.lowercase()) {
+        "haya"  -> 1.0
+        "pino"  -> 0.75
+        "roble" -> 0.6
+        else    -> 0.3
     }
 
     // N/NE retain moisture best; S/SW are driest
@@ -69,7 +78,7 @@ object ScoringEngine {
     ): com.cepalert.data.model.ScoreResult {
         val nHumidity    = normalizeHumidity(weather.humidity7dAvg)
         val nRain        = normalizeRain10d(weather.rain10dTotal)
-        val nForest      = if (zone.bosqueCompatible) 1.0 else 0.0
+        val nForest      = normalizeForest(zone.bosqueTipo)
         val nTemp        = normalizeTemperature(weather.temp7dAvg)
         val nAltitude    = normalizeAltitude(zone.altitud)
         val nOrientation = normalizeOrientation(zone.orientacion)

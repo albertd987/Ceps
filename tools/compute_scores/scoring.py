@@ -29,13 +29,19 @@ def normalize_temperature(temp: float) -> float:
 
 
 def normalize_altitude(m: int) -> float:
-    if 900 <= m <= 1800:
-        return 1.0
+    if m < 500:
+        return 0.0
     if m < 900:
-        return max(0.0, (m - 400) / 500)
-    if m <= 2100:
-        return 1.0 - (m - 1800) / 300
+        return min(1.0, (m - 500) / 400)
+    if m <= 1500:
+        return 1.0
+    if m <= 2200:
+        return max(0.0, 1.0 - (m - 1500) / 700)
     return 0.0
+
+
+def normalize_forest(tipo: str) -> float:
+    return {"haya": 1.0, "pino": 0.75, "roble": 0.6}.get(tipo.lower(), 0.3)
 
 
 def normalize_orientation(o: str) -> float:
@@ -55,7 +61,7 @@ def seasonal_factor(month: int) -> float:
 def compute_score(weather: dict, zone: dict, month: int) -> int:
     n_hum  = normalize_humidity(weather["hum7d"])
     n_rain = normalize_rain10d(weather["rain10d"])
-    n_for  = 1.0 if zone["bosque_compatible"] else 0.0
+    n_for  = normalize_forest(zone["bosque_tipo"])
     n_temp = normalize_temperature(weather["temp7d"])
     n_alt  = normalize_altitude(zone["altitud"])
     n_ori  = normalize_orientation(zone["orientacion"])
